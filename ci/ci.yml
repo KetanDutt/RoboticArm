@@ -1,0 +1,98 @@
+# GitHub Actions workflow for the RoboticArm firmware.
+#
+# INSTALLATION: copy this file to .github/workflows/ci.yml and push it.
+#
+#     mkdir -p .github/workflows && cp ci/ci.yml .github/workflows/ci.yml
+#
+# It is kept here rather than in .github/workflows/ because the automation that
+# produced this branch authenticates as a GitHub App without the `workflows`
+# permission, and GitHub refuses such a push outright ("refusing to allow a
+# GitHub App to create or update workflow").  A human push from a normal
+# account has no such restriction.  Once the file is in place, CI runs on every
+# push and pull request; nothing else needs to change -- every path below is
+# relative to the repository root and works from either location.
+#
+# See docs/TESTING.md#8-continuous-integration for what each job does.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # ------------------------------------------------------------------------
+  # Fast host checks: unit tests for the shared core, the build-variant
+  # matrix and a proof that unsafe configurations are rejected.
+  # ------------------------------------------------------------------------
+  host:
+    name: Shared core + configuration matrix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Shared core copies are in sync with common/
+        run: python3 tools/sync_common.py --check
+
+      - name: Unit tests
+        run: make -C tests test
+
+      - name: Compile + link + smoke-run every build variant
+        run: ./tools/check_configs.sh
+
+      - name: Unsafe configurations must be rejected at compile time
+        run: |
+          set -e
+          # A failsafe timeout shorter than a few frame air times would trip
+          # while the glove is merely holding still.
+          if make -s -C tests sketch-check \
+               EXTRA_FLAGS="-DGLOVE_RX_FAILSAFE_TIMEOUT_MS=50" >/dev/null 2>&1; then
+            echo "FAIL: a 50 ms failsafe timeout was accepted" >&2
+            exit 1
+          fi
+          # An unknown board profile must be refused, not silently defaulted.
+          if make -s -C tests sketch-check \
+               EXTRA_FLAGS="-DGLOVE_PROFILE=99" >/dev/null 2>&1; then
+            echo "FAIL: an unknown GLOVE_PROFILE was accepted" >&2
+            exit 1
+          fi
+          echo "both guards fired as expected"
+
+      - name: Python tools are syntactically valid
+        run: python3 -m py_compile tools/sync_common.py tools/glove_monitor.py tools/rf_airtime.py
+
+      - name: Air-time budget (informational)
+        run: python3 tools/rf_airtime.py --speed 2000 4000
+
+  # ------------------------------------------------------------------------
+  # Real firmware build with avr-gcc via arduino-cli.  This is the check that
+  # matters for flashing: genuine Arduino core, genuine third-party libraries.
+  # ------------------------------------------------------------------------
+  firmware:
+    name: Firmware build (avr-gcc)
+    runs-on: ubuntu-latest
+    env:
+      ARDUINO_LIBS: ${{ github.workspace }}/arduino-libraries
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install arduino-cli
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh \
+            | BINDIR="${{ github.workspace }}/bin" sh
+          echo "${{ github.workspace }}/bin" >> "$GITHUB_PATH"
+
+      - name: Build both sketches for Arduino Uno
+        run: ./tools/build.sh
+
+      - name: Build both sketches for Arduino Mega 2560
+        run: FQBN=arduino:avr:mega ./tools/build.sh
+
+      - name: Show firmware sizes
+        run: |
+          du -h arduino-libraries/* 2>/dev/null | head -20 || true
