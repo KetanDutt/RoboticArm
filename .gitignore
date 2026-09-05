@@ -1,0 +1,34 @@
+# --- build artefacts -------------------------------------------------------
+tests/build/
+tests/sketchbuild/
+tests/glove_tests
+*.o
+*.elf
+*.hex
+*.bin
+*.eep
+*.map
+build/
+dist/
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# --- editors / OS ---------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# --- python ---------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# --- logs and captures -----------------------------------------------------
+*.log
+captures/
